@@ -20,7 +20,11 @@ public class Need {
 
     @Column(name = "createtime")
     private LocalDateTime createTime;
+    @Column(name = "category")
+    private String category;
 
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
     // 关联用户（非数据库字段）
     @Transient
     private User user;

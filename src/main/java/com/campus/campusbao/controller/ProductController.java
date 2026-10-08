@@ -142,19 +142,13 @@ public class ProductController {
 package com.campus.campusbao.controller;
 
 import com.campus.campusbao.common.Result;
-import com.campus.campusbao.entity.Product;
-import com.campus.campusbao.entity.User;
-import com.campus.campusbao.repository.ProductRepository;
-import com.campus.campusbao.repository.UserRepository;
+import com.campus.campusbao.entity.*;
+import com.campus.campusbao.repository.*;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import com.campus.campusbao.entity.Cart;
-import com.campus.campusbao.entity.Collect;
-import com.campus.campusbao.repository.CartRepository;
-import com.campus.campusbao.repository.CollectRepository;
-
+import java.util.*;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -162,6 +156,12 @@ import java.util.List;
 import java.util.Map;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.stream.Collectors;
+import java.util.Collections;
+import java.util.Set;
+import java.util.HashSet;
+
+import com.campus.campusbao.repository.NeedRepository;
 @RestController
 
 @RequestMapping("/product")
@@ -171,13 +171,30 @@ public class ProductController {
     private final UserRepository userRepository;
     @Autowired
     private CartRepository cartRepository;
-
+    @Autowired
+    private ProductClickRepository productClickRepository;
+    @Autowired
+    private OrderRepository orderRepository;
     @Autowired
     private CollectRepository collectRepository;
+    @Autowired
+    private NeedRepository needRepository;
+
 
     public ProductController(ProductRepository productRepository, UserRepository userRepository) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
+    }
+    // 同义词映射（可以放到配置文件或数据库）
+    private static final Map<String, List<String>> SYNONYMS = new HashMap<>();
+
+    static {
+        SYNONYMS.put("电脑", Arrays.asList("笔记本", "PC", "计算机", "macbook"));
+        SYNONYMS.put("手机", Arrays.asList("电话", "iphone", "华为", "小米"));
+        SYNONYMS.put("充电宝", Arrays.asList("移动电源", "充电器"));
+        SYNONYMS.put("鞋", Arrays.asList("运动鞋", "板鞋", "跑鞋"));
+        SYNONYMS.put("书", Arrays.asList("教材", "课本", "书籍"));
+        SYNONYMS.put("自行车", Arrays.asList("单车", "山地车", "通勤车"));
     }
     // 1.获取我的商品
     @GetMapping("/my")
@@ -212,6 +229,7 @@ public class ProductController {
         p.setPrice(product.getPrice());
         p.setType(product.getType());
         p.setInfo(product.getInfo());
+        p.setHot(product.getHot());
         productRepository.save(p);
         return Result.success("更新成功");
     }
@@ -225,7 +243,7 @@ public class ProductController {
         user.setId(loginUser.getId());
         product.setUser(user);
 
-        product.setStatus(0);
+        product.setStatus(3);
         product.setHot(0);
         productRepository.save(product);
         return Result.success("发布成功");
@@ -323,7 +341,7 @@ public Result list(HttpSession session) {
         return Result.success(list);
     }
 
-    // 9.推荐商品算法
+   /* // 9.推荐商品算法
     @GetMapping("/recommend")
     public Result recommend(@RequestParam Integer userId, HttpSession session) {
         List<Product> all = productRepository.findByStatus(0);
@@ -360,7 +378,59 @@ public Result list(HttpSession session) {
                     .toList();
         }
         return Result.success(finalList);
-    }
+    }*/
+   @GetMapping("/recommend")
+   public Result recommend(@RequestParam Integer userId, HttpSession session) {
+       List<Product> all = productRepository.findByStatus(0);
+       User user = userRepository.findById(userId).orElse(null);
+       Map<Integer, Product> resultMap = new LinkedHashMap<>();
+
+       // 1. 热门商品
+       List<Product> hotList = all.stream()
+               .filter(p -> p.getHot() == 1)
+               .collect(Collectors.toList());
+       for (Product p : hotList) {
+           resultMap.put(p.getId(), p);
+       }
+
+       // 2. 搜索过的类型推荐
+       if (user != null && user.getUserTags() != null && !user.getUserTags().isEmpty()) {
+           String[] tags = user.getUserTags().split(",");
+           for (String tag : tags) {
+               int count = 0;
+               for (Product p : all) {
+                   if (count >= 2) break;
+                   if (tag.equals(p.getType()) && !resultMap.containsKey(p.getId())) {
+                       resultMap.put(p.getId(), p);
+                       count++;
+                   }
+               }
+           }
+       }
+
+       // 3. 新增：点击≥3次的类型推荐
+       List<String> frequentTypes = productClickRepository.findFrequentClickTypes(userId);
+       for (String type : frequentTypes) {
+           for (Product p : all) {
+               if (type.equals(p.getType()) && !resultMap.containsKey(p.getId())) {
+                   resultMap.put(p.getId(), p);
+                   break;  // 每个类型只加1个
+               }
+           }
+       }
+
+       // 过滤自己
+       User loginUser = (User) session.getAttribute("loginUser");
+       if (loginUser != null) {
+           Integer uid = loginUser.getId();
+           List<Product> finalList = resultMap.values().stream()
+                   .filter(p -> p.getUser() == null || !p.getUser().getId().equals(uid))
+                   .collect(Collectors.toList());
+           return Result.success(finalList);
+       }
+
+       return Result.success(new ArrayList<>(resultMap.values()));
+   }
     // 10.商品详情页
     @GetMapping("/detail/{id}")
     public Result getProductDetail(@PathVariable Integer id) {
@@ -431,7 +501,7 @@ public Result list(HttpSession session) {
 
     // 14.购物车删除
     @GetMapping("/cart/delete")
-    public Result deleteCart(Integer id) {  // 方法名从 delete → deleteCart
+    public Result deleteCart(Integer id) {
         cartRepository.deleteById(id);
         return Result.success("✅删除成功");
     }
@@ -472,7 +542,7 @@ public Result myCollect(Integer userId) {
         }
         return Result.success(list);
     }
-    // 获取自己的所有在售商品（用于创建礼包）
+    // 18.获取自己的所有在售商
     @GetMapping("/my/all")
     public Result getMyAllProducts(HttpSession session) {
         User loginUser = (User) session.getAttribute("loginUser");
@@ -488,5 +558,250 @@ public Result myCollect(Integer userId) {
             }
         }
         return Result.success(list);
+    }
+    // 19.记录商品点击
+    @PostMapping("/click")
+    public Result recordClick(@RequestParam Integer productId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+
+        ProductClick existing = productClickRepository.findByUserIdAndProductId(loginUser.getId(), productId);
+        if (existing != null) {
+            productClickRepository.incrementClickCount(loginUser.getId(), productId);
+        } else {
+            ProductClick click = new ProductClick();
+            click.setUserId(loginUser.getId());
+            click.setProductId(productId);
+            click.setClickCount(1);
+            click.setUpdateTime(java.time.LocalDateTime.now());
+            productClickRepository.save(click);
+        }
+
+        return Result.success("记录成功");
+    }
+
+    // 20.获取点击≥3次的商品类型
+    @GetMapping("/click/types")
+    public Result getFrequentClickTypes(@RequestParam Integer userId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+        List<String> types = productClickRepository.findFrequentClickTypes(userId);
+        return Result.success(types);
+    }
+    //21. 获取点击≥3次的商品ID列表
+    @GetMapping("/click/productIds")
+    public Result getFrequentClickProductIds(@RequestParam Integer userId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+        List<Integer> ids = productClickRepository.findFrequentClickProductIds(userId);
+        return Result.success(ids);
+    }
+    // 22.清除用户的点击记录
+    @PostMapping("/click/clear")
+    public Result clearClickRecords(@RequestParam Integer userId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !loginUser.getId().equals(userId)) {
+            return Result.error("无权限");
+        }
+
+        List<ProductClick> records = productClickRepository.findByUserId(userId);
+        productClickRepository.deleteAll(records);
+        return Result.success("清除成功");
+    }
+    //23. 随机获取N个在售商品
+    private List<Product> getRandomProducts(Integer currentProductId, int limit) {
+        List<Product> all = productRepository.findByStatus(0);
+        List<Product> candidates = new ArrayList<>();
+        for (Product p : all) {
+            if (!p.getId().equals(currentProductId)) {
+                candidates.add(p);
+            }
+        }
+        Collections.shuffle(candidates);
+        return candidates.stream().limit(limit).collect(Collectors.toList());
+    }
+    //24. 根据用户购买历史推荐同类商品
+    @GetMapping("/recommend/byPurchase")
+    public Result recommendByPurchase(@RequestParam Integer currentProductId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.success(getRandomProducts(currentProductId, 10));
+        }
+
+        // 1. 查询用户已完成的订单中的商品类型
+        List<Order> completedOrders = orderRepository.findByBuyerIdAndOrderStatus(loginUser.getId(), "completed");
+        Set<String> purchasedTypes = new HashSet<>();
+        for (Order order : completedOrders) {
+            Product orderedProduct = productRepository.findById(order.getProductId()).orElse(null);
+            if (orderedProduct != null && orderedProduct.getType() != null) {
+                purchasedTypes.add(orderedProduct.getType());
+            }
+        }
+
+        // 2. 如果没有购买记录 → 随机推荐
+        if (purchasedTypes.isEmpty()) {
+            return Result.success(getRandomProducts(currentProductId, 10));
+        }
+
+        // 3. 根据这些类型推荐同类商品
+        Set<Integer> excludeIds = new HashSet<>();
+        excludeIds.add(currentProductId);
+        List<Product> recommendList = new ArrayList<>();
+
+        for (String type : purchasedTypes) {
+            // 获取该类型下所有符合条件的商品
+            List<Product> sameTypeProducts = productRepository.findByTypeAndStatusAndUserIdNot(type, 0, loginUser.getId());
+
+            // 过滤掉已添加的和当前商品
+            List<Product> available = new ArrayList<>();
+            for (Product p : sameTypeProducts) {
+                if (!excludeIds.contains(p.getId())) {
+                    available.add(p);
+                }
+            }
+
+            //  随机打乱后取前2个
+            Collections.shuffle(available);
+            for (int i = 0; i < Math.min(2, available.size()) && recommendList.size() < 10; i++) {
+                recommendList.add(available.get(i));
+                excludeIds.add(available.get(i).getId());
+            }
+
+            if (recommendList.size() >= 10) break;
+        }
+
+        // 4. 如果还不够10个，用随机商品补全
+        if (recommendList.size() < 10) {
+            List<Product> randomProducts = getRandomProducts(currentProductId, 10 - recommendList.size());
+            for (Product p : randomProducts) {
+                if (!excludeIds.contains(p.getId())) {
+                    recommendList.add(p);
+                }
+            }
+        }
+
+        // 打乱一次最终顺序
+        Collections.shuffle(recommendList);
+        return Result.success(recommendList);
+    }
+    // 搜索联想 - 输入前缀返回相关商品名称
+    @GetMapping("/search/suggest")
+    public Result searchSuggest(@RequestParam String keyword) {
+        if (keyword == null || keyword.trim().isEmpty()) {
+            return Result.success(new ArrayList<>());
+        }
+
+        // 查询商品名称包含关键词的商品（取前10个）
+        List<Product> products = productRepository.findByNameContaining(keyword);
+
+        // 返回商品名称列表
+        List<String> suggestions = products.stream()
+                .map(Product::getName)
+                .distinct()
+                .limit(10)
+                .collect(Collectors.toList());
+
+        return Result.success(suggestions);
+    }
+    // 智能搜索
+    @GetMapping("/search/intelligent")
+    public Result intelligentSearch(@RequestParam String keyword) {
+        if (keyword == null || keyword.trim().isEmpty()) {
+            return Result.success(new ArrayList<>());
+        }
+
+        Set<String> searchWords = new HashSet<>();
+        searchWords.add(keyword);
+
+        // 添加同义词
+        for (Map.Entry<String, List<String>> entry : SYNONYMS.entrySet()) {
+            if (entry.getKey().contains(keyword) || keyword.contains(entry.getKey())) {
+                searchWords.add(entry.getKey());
+                searchWords.addAll(entry.getValue());
+            }
+            for (String syn : entry.getValue()) {
+                if (syn.contains(keyword) || keyword.contains(syn)) {
+                    searchWords.add(entry.getKey());
+                    searchWords.addAll(entry.getValue());
+                }
+            }
+        }
+
+        // 搜索匹配的商品
+        List<Product> results = new ArrayList<>();
+        for (String word : searchWords) {
+            List<Product> products = productRepository.findByNameContaining(word);
+            for (Product p : products) {
+                if (!results.contains(p)) {
+                    results.add(p);
+                }
+            }
+        }
+
+        return Result.success(results);
+    }
+    // 管理员审核商品
+    @PostMapping("/admin/audit")
+    public Result auditProduct(@RequestParam Integer productId,
+                               @RequestParam Integer auditStatus,  // 1通过，2驳回
+                               @RequestParam(required = false) String rejectReason,
+                               HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        Product product = productRepository.findById(productId).orElse(null);
+        if (product == null) {
+            return Result.error("商品不存在");
+        }
+
+        if (auditStatus == 1) {
+            product.setStatus(0);  // 审核通过 → 出售中
+        } else {
+            product.setStatus(2);  // 审核驳回 → 下架
+        }
+        productRepository.save(product);
+
+        return Result.success(auditStatus == 1 ? "审核通过" : "已驳回");
+    }
+    @GetMapping("/admin/pending")
+    public Result getPendingProducts(HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        // 查询status=3的商品（审核中）
+        List<Product> list = productRepository.findByStatus(3);
+        for (Product p : list) {
+            if (p.getUser() != null) {
+                p.getUser().getAvatar();
+            }
+        }
+        return Result.success(list);
+    }
+    // 管理员获取所有商品（包括待审核、已下架等）
+    @GetMapping("/admin/list")
+    public Result getAdminProductList(HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        // 管理员看到所有商品
+        List<Product> allProducts = productRepository.findAll();
+        for (Product p : allProducts) {
+            if (p.getUser() != null) {
+                p.getUser().getAvatar();
+            }
+        }
+        return Result.success(allProducts);
     }
 }

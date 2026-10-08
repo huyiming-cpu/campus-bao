@@ -18,18 +18,18 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.transaction.annotation.Transactional;
 
-public interface UserRepository extends JpaRepository<User, Integer> {
+import java.util.List;
 
-    // 原有登录方法
+public interface UserRepository extends JpaRepository<User, Integer> {
     User findByUsernameAndPassword(String username, String password);
     User findByUsernameAndPhone(String username, String phone);
     boolean existsByStudentId(String studentId);
     boolean existsByCardId(String studentId);
-    // 根据用户名查询（判断重复）
 
-    // 修复：严格匹配 Integer 类型的更新方法
     @Modifying
     @Transactional
     @Query("UPDATE User u SET u.userTags = :tags WHERE u.id = :userId")
     void updateUserTags(Integer userId, String tags);
+    @Query("SELECT u FROM User u WHERE u.username != 'admin' ORDER BY u.creditScore DESC")
+    List<User> findAllByOrderByCreditScoreDesc();
 }

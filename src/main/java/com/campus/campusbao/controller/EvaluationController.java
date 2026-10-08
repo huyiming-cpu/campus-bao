@@ -35,8 +35,9 @@ public class EvaluationController {
 
     // 评分对应增加的信用分
     private int getCreditIncrease(int rating) {
-        if (rating >= 4) return 3;
-        if (rating >= 3) return 2;
+        if (rating >= 5) return 3;
+        if (rating >= 4) return 2;
+        if(rating >= 3)  return 1;
         if(rating >= 2)  return 0;
         return -1;
     }

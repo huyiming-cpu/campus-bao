@@ -20,7 +20,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public User login(String username, String password) {
         User loginUser = userRepository.findByUsernameAndPassword(username, password);
-        // 如再查一次完整信息
+
         if (loginUser != null) {
             loginUser = userRepository.findById(loginUser.getId()).orElse(loginUser);
         }

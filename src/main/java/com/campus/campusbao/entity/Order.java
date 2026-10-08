@@ -85,7 +85,7 @@ public class Order {
     private Address address;
     @Column(name = "discount_amount")
     private BigDecimal discountAmount;
-    @Column(name = "refund_status")
+    @Column(name = "refund_status", columnDefinition = "varchar(20) default 'none'")
     private String refundStatus;
 
     @Column(name = "refund_time")
@@ -177,7 +177,7 @@ public class Order {
     public Address getAddress() { return address; }
 
     public void setAddress(Address address) {
-
+        this.address = address;  // 添加这行
     }
 
     public void setBuyerName(String username) {

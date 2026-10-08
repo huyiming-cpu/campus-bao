@@ -6,7 +6,7 @@ import java.util.List;
 
 public interface ProductRepository extends JpaRepository<Product, Integer> {
 
-    // 正常使用，无报错，无冲突
+
     List<Product> findByUser_Id(Integer userId);
     List<Product> findByStatus(Integer status);
     List<Product> findByUser_IdAndBuyerIdIsNull(Integer userId);
@@ -15,4 +15,8 @@ public interface ProductRepository extends JpaRepository<Product, Integer> {
     List<Product> findByUserId(Integer id);
 
     List<Product> findByUserIdAndStatus(Integer userId, Integer status);
+
+    List<Product> findByTypeAndStatusAndUserIdNot(String type, int i, Integer id);
+    // 模糊搜索商品名称
+    List<Product> findByNameContaining(String keyword);
 }

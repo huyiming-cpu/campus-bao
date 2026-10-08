@@ -21,4 +21,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
 
     // 根据订单号查询
     Order findByOrderNo(String orderNo);
+    // 查询用户最近购买的订单
+    List<Order> findTop5ByBuyerIdOrderByCreateTimeDesc(Integer buyerId);
+    List<Order> findByBuyerIdAndOrderStatus(Integer buyerId, String orderStatus);
 }

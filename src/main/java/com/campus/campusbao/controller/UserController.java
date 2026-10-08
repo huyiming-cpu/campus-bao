@@ -9,6 +9,9 @@ import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 import java.io.File;
 import java.util.*;
@@ -173,22 +176,92 @@ public class UserController {
         userService.updateById(dbUser);
         return Result.success("保存成功");
     }
-    /*暂停
-    @GetMapping("/save-tag")
-    public Result saveUserTag(
-            @RequestParam Integer userId,
-            @RequestParam String tag
-    ) {
-        User user = userRepository.findById(userId).orElse(null);
-        if (user == null) return Result.error("用户不存在");
+    // 管理员删除用户
+    @DeleteMapping("/admin/delete/{userId}")
+    public Result adminDeleteUser(@PathVariable Integer userId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
 
-        String oldTags = user.getUserTags() == null ? "" : user.getUserTags();
-        Set<String> tagSet = new HashSet<>(Arrays.asList(oldTags.split(",")));
-        tagSet.add(tag);
+        User targetUser = userService.getById(userId);
+        if (targetUser == null) {
+            return Result.error("用户不存在");
+        }
 
-        String newTags = String.join(",", tagSet);
-        userRepository.updateUserTags(userId, newTags);
+        // 不能删除管理员自己
+        if (targetUser.getId().equals(loginUser.getId())) {
+            return Result.error("不能删除当前登录的管理员账号");
+        }
 
+        try {
+            // 删除用户（service层会处理关联的商品和订单）
+            userService.removeById(userId);
+            return Result.success("删除成功");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error("删除失败：" + e.getMessage());
+        }
+    }
+
+    // 获取用户信用分排行榜
+    @GetMapping("/credit/rank")
+    public Result getCreditRank() {
+        List<User> users = userRepository.findAllByOrderByCreditScoreDesc();
+        List<Map<String, Object>> rankList = new ArrayList<>();
+        int rank = 1;
+        for (User user : users) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("rank", rank++);
+            item.put("id", user.getId());
+            item.put("username", user.getUsername());
+            item.put("creditScore", user.getCreditScore());
+            item.put("creditLevel", user.getCreditLevel());
+            item.put("avatar", user.getAvatar());
+            rankList.add(item);
+        }
+        return Result.success(rankList);
+    }
+    // 游戏加分接口
+    @PostMapping("/credit/add")
+    public Result addCredit(@RequestParam Integer score, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+
+        loginUser.setCreditScore(loginUser.getCreditScore() + score);
+
+        // 更新等级
+        int s = loginUser.getCreditScore();
+        if (s < 40) loginUser.setCreditLevel("较差");
+        else if (s < 60) loginUser.setCreditLevel("一般");
+        else if (s < 80) loginUser.setCreditLevel("良好");
+        else if (s < 100) loginUser.setCreditLevel("优秀");
+        else loginUser.setCreditLevel("极好");
+
+        userRepository.save(loginUser);
+
+        return Result.success("加分成功");
+    }
+    // 记录搜索历史
+    @PostMapping("/addSearchTag")
+    public Result addSearchTag(@RequestParam String tag, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+
+        String oldTags = loginUser.getUserTags();
+        if (oldTags == null || oldTags.isEmpty()) {
+            loginUser.setUserTags(tag);
+        } else {
+            // 去重
+            Set<String> tagSet = new HashSet<>(Arrays.asList(oldTags.split(",")));
+            tagSet.add(tag);
+            loginUser.setUserTags(String.join(",", tagSet));
+        }
+        userRepository.save(loginUser);
         return Result.success("记录成功");
-    }*/
+    }
 }

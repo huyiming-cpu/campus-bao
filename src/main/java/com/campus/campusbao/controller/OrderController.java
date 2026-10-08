@@ -21,7 +21,8 @@ public class OrderController {
     private UserCouponRepository userCouponRepository;
     @Autowired
     private ProductRepository productRepository;
-
+    @Autowired
+    private AddressRepository addressRepository;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -41,13 +42,16 @@ public class OrderController {
     @GetMapping("/admin/all")
     public Result getAllOrders() {
         List<Order> orders = orderRepository.findAll();
-        // 填充商品和用户信息
         for (Order order : orders) {
             order.setProduct(productRepository.findById(order.getProductId()).orElse(null));
             User buyer = userRepository.findById(order.getBuyerId()).orElse(null);
             User seller = userRepository.findById(order.getSellerId()).orElse(null);
-            if (buyer != null) order.setBuyerName(buyer.getUsername());
-            if (seller != null) order.setSellerName(seller.getUsername());
+            if (buyer != null) order.setBuyerName(buyer.getUsername());  // ✅ 这里设置用户名
+            if (seller != null) order.setSellerName(seller.getUsername()); // ✅ 这里设置用户名
+
+            if (order.getAddressId() != null && order.getAddressId() > 0) {
+                Address address = addressRepository.findById(order.getAddressId()).orElse(null);
+                order.setAddress(address);}
         }
         return Result.success(orders);
     }
@@ -87,6 +91,7 @@ public class OrderController {
         order.setOrderStatus("pending");
         order.setPayStatus("unpaid");
         order.setDeliveryStatus("pending");
+        order.setRefundStatus("none");//初始设退款状态为none
 
         // ✅ 计算优惠金额 = (原价 × 数量) - 实付总价
         BigDecimal originalTotal = order.getPrice().multiply(new BigDecimal(order.getQuantity()));
@@ -125,11 +130,13 @@ public class OrderController {
             orders = orderRepository.findByBuyerIdOrderByCreateTimeDesc(loginUser.getId());
         }
 
-        // 填充商品信息
         for (Order order : orders) {
             order.setProduct(productRepository.findById(order.getProductId()).orElse(null));
+            // ✅ 添加地址填充
+            if (order.getAddressId() != null && order.getAddressId() > 0) {
+                order.setAddress(addressRepository.findById(order.getAddressId()).orElse(null));
+            }
         }
-
         return Result.success(orders);
     }
 
@@ -148,11 +155,13 @@ public class OrderController {
             orders = orderRepository.findBySellerIdOrderByCreateTimeDesc(loginUser.getId());
         }
 
-        // 填充商品信息
         for (Order order : orders) {
             order.setProduct(productRepository.findById(order.getProductId()).orElse(null));
+            // ✅ 卖家看订单也能看到买家的收货地址
+            if (order.getAddressId() != null && order.getAddressId() > 0) {
+                order.setAddress(addressRepository.findById(order.getAddressId()).orElse(null));
+            }
         }
-
         return Result.success(orders);
     }
 
@@ -467,9 +476,14 @@ public class OrderController {
             return Result.error("无权操作");
         }
 
+
         // 只有待付款和已取消不能退款，其他都可以
         if ("pending".equals(order.getOrderStatus()) || "cancelled".equals(order.getOrderStatus())) {
             return Result.error("当前订单状态不可退款");
+        }
+// 已退款的也不能再申请
+        if ("refunded".equals(order.getOrderStatus())) {
+            return Result.error("订单已退款，无法再次申请");
         }
         // 检查是否已申请过
         if (!"none".equals(order.getRefundStatus())) {
@@ -619,5 +633,278 @@ public class OrderController {
         result.put("refundAmount", order.getRefundAmount());
 
         return Result.success(result);
+    }
+    //15.买家取消订单
+    // 买家取消订单（仅待付款状态）
+    @PostMapping("/cancel")
+    public Result cancelOrder(@RequestParam Integer orderId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        // 只有买家可以取消
+        if (!order.getBuyerId().equals(loginUser.getId())) {
+            return Result.error("无权操作");
+        }
+
+        // 只有待付款可以取消
+        if (!"pending".equals(order.getOrderStatus())) {
+            return Result.error("当前订单状态不可取消");
+        }
+
+        order.setOrderStatus("cancelled");
+        orderRepository.save(order);
+
+        // 恢复优惠券
+        if (order.getUserCouponId() != null) {
+            Optional<UserCoupon> ucOpt = userCouponRepository.findById(order.getUserCouponId());
+            if (ucOpt.isPresent()) {
+                UserCoupon userCoupon = ucOpt.get();
+                userCoupon.setStatus("unused");
+                userCoupon.setUseTime(null);
+                userCouponRepository.save(userCoupon);
+            }
+        }
+
+        return Result.success("取消成功");
+    }
+    // 16. 管理员取消订单（任意订单）
+    @PostMapping("/admin/cancel/{orderId}")
+    public Result adminCancelOrder(@PathVariable Integer orderId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        // 只有待付款可以取消
+        if (!"pending".equals(order.getOrderStatus())) {
+            return Result.error("当前订单状态不可取消");
+        }
+
+        order.setOrderStatus("cancelled");
+        orderRepository.save(order);
+
+        // 恢复优惠券
+        if (order.getUserCouponId() != null) {
+            Optional<UserCoupon> ucOpt = userCouponRepository.findById(order.getUserCouponId());
+            if (ucOpt.isPresent()) {
+                UserCoupon userCoupon = ucOpt.get();
+                userCoupon.setStatus("unused");
+                userCoupon.setUseTime(null);
+                userCouponRepository.save(userCoupon);
+            }
+        }
+
+        return Result.success("取消成功");
+    }
+
+    // 17. 管理员强制发货
+    @PostMapping("/admin/ship/{orderId}")
+    public Result adminShipOrder(@PathVariable Integer orderId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        if (!"paid".equals(order.getOrderStatus())) {
+            return Result.error("只有待发货订单可以发货");
+        }
+
+        order.setOrderStatus("shipped");
+        order.setDeliveryStatus("shipped");
+        order.setShipTime(LocalDateTime.now());
+        orderRepository.save(order);
+
+        return Result.success("发货成功");
+    }
+
+    // 18. 管理员强制确认收货
+    @PostMapping("/admin/confirm/{orderId}")
+    public Result adminConfirmOrder(@PathVariable Integer orderId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        if (!"shipped".equals(order.getOrderStatus())) {
+            return Result.error("只有待收货订单可以确认收货");
+        }
+
+        // 线下交易：确认收货时扣款
+        if ("offline".equals(order.getTradeType())) {
+            int result = walletRepository.deductBalance(order.getBuyerId(), order.getTotalAmount());
+            if (result == 0) {
+                return Result.error("买家余额不足，无法确认收货");
+            }
+            // 给卖家加钱
+            BigDecimal originalAmount = order.getPrice().multiply(new BigDecimal(order.getQuantity()));
+            walletRepository.addBalance(order.getSellerId(), originalAmount);
+
+            // 流水记录...
+        }
+
+        order.setOrderStatus("completed");
+        order.setDeliveryStatus("received");
+        order.setCompleteTime(LocalDateTime.now());
+        orderRepository.save(order);
+
+        return Result.success("确认收货成功");
+    }
+
+    // 19. 管理员按条件搜索订单
+    @GetMapping("/admin/search")
+    public Result adminSearchOrders(
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) String buyerName,
+            @RequestParam(required = false) String sellerName,
+            @RequestParam(required = false) String productName,
+            @RequestParam(required = false) String orderStatus,
+            HttpSession session) {
+
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        List<Order> orders = orderRepository.findAll();
+        List<Order> result = new ArrayList<>();
+
+        for (Order order : orders) {
+            // 填充商品和用户信息
+            order.setProduct(productRepository.findById(order.getProductId()).orElse(null));
+            User buyer = userRepository.findById(order.getBuyerId()).orElse(null);
+            User seller = userRepository.findById(order.getSellerId()).orElse(null);
+            if (buyer != null) order.setBuyerName(buyer.getUsername());
+            if (seller != null) order.setSellerName(seller.getUsername());
+
+            // 筛选条件
+            boolean match = true;
+            if (orderNo != null && !orderNo.isEmpty() && !order.getOrderNo().contains(orderNo)) {
+                match = false;
+            }
+            if (buyerName != null && !buyerName.isEmpty() && (buyer == null || !buyer.getUsername().contains(buyerName))) {
+                match = false;
+            }
+            if (sellerName != null && !sellerName.isEmpty() && (seller == null || !seller.getUsername().contains(sellerName))) {
+                match = false;
+            }
+            if (productName != null && !productName.isEmpty()) {
+                Product p = order.getProduct();
+                if (p == null || !p.getName().contains(productName)) {
+                    match = false;
+                }
+            }
+            if (orderStatus != null && !orderStatus.isEmpty() && !orderStatus.equals(order.getOrderStatus())) {
+                match = false;
+            }
+
+            if (match) {
+                result.add(order);
+            }
+        }
+
+        return Result.success(result);
+    }
+
+    // 20. 管理员获取订单统计
+    @GetMapping("/admin/statistics")
+    public Result getOrderStatistics(HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        List<Order> orders = orderRepository.findAll();
+
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("total", orders.size());
+        stats.put("pending", orders.stream().filter(o -> "pending".equals(o.getOrderStatus())).count());
+        stats.put("paid", orders.stream().filter(o -> "paid".equals(o.getOrderStatus())).count());
+        stats.put("shipped", orders.stream().filter(o -> "shipped".equals(o.getOrderStatus())).count());
+        stats.put("completed", orders.stream().filter(o -> "completed".equals(o.getOrderStatus())).count());
+        stats.put("cancelled", orders.stream().filter(o -> "cancelled".equals(o.getOrderStatus())).count());
+        stats.put("refunded", orders.stream().filter(o -> "refunded".equals(o.getOrderStatus())).count());
+
+        // 计算总金额
+        BigDecimal totalAmount = orders.stream()
+                .map(Order::getTotalAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        stats.put("totalAmount", totalAmount);
+
+        return Result.success(stats);
+    }
+    //21.管理员删除订单
+    // 管理员删除订单（任意订单）
+    @DeleteMapping("/admin/delete/{orderId}")
+    public Result adminDeleteOrder(@PathVariable Integer orderId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null || !"admin".equals(loginUser.getUsername())) {
+            return Result.error("无权限");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        orderRepository.delete(order);
+        return Result.success("删除成功");
+    }
+    //22.买家修改收货地址
+    // 修改订单收货地址（只有待发货状态可以修改）
+    @PostMapping("/updateAddress")
+    public Result updateOrderAddress(@RequestParam Integer orderId, @RequestParam Integer addressId, HttpSession session) {
+        User loginUser = (User) session.getAttribute("loginUser");
+        if (loginUser == null) {
+            return Result.error("请先登录");
+        }
+
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            return Result.error("订单不存在");
+        }
+
+        // 只能修改自己的订单
+        if (!order.getBuyerId().equals(loginUser.getId())) {
+            return Result.error("无权操作");
+        }
+
+        // ✅ 只有待发货状态可以修改地址
+        if (!"paid".equals(order.getOrderStatus())) {
+            return Result.error("只有待发货状态的订单才能修改地址");
+        }
+
+        // 检查地址是否存在且属于当前用户
+        Address address = addressRepository.findById(addressId).orElse(null);
+        if (address == null || !address.getUserId().equals(loginUser.getId())) {
+            return Result.error("地址不存在");
+        }
+
+        order.setAddressId(addressId);
+        orderRepository.save(order);
+
+        return Result.success("地址修改成功");
     }
 }
